@@ -15,7 +15,8 @@ def intermediate(data):
     for x in data_list:
         _,d = x.split("=")
         aux.append(float(d.strip()))
-    fit(alp=aux[0],momentum=aux[1],epocas=aux[2],error=aux[3],neuronas=aux[4])
+    data_json = fit(alp=aux[0],momentum=aux[1],epocas=aux[2],error=aux[3],neuronas=aux[4])
+    return  data_json
 
 
     
@@ -59,7 +60,7 @@ def fit(neuronas = 2,alp = 0.5,epocas = 6000,error = 0.01,momentum = 0.9):
     # Calcular y mostrar el error cuadrático medio (MSE)
     mse = obj_fit.calculate_mse(predictions)
     print(f"Error Cuadrático Medio (MSE): {mse:.6f}")
-    return 
+    return data_json
 
 
 def graficar():
@@ -113,10 +114,10 @@ Neuronas ocultas = 2
         if os.path.exists(archivo):
             with open(archivo, 'r') as file:
                 contenido = file.read()
-            intermediate(data=contenido)
+            data_son = intermediate(data=contenido)
             # Simulación: Usar datos falsos para épocas y errores por ahora
-            epocas = list(range(1, 101))
-            errores = [1/(e+1) for e in epocas]  # Ejemplo de evolución de errores
+            epocas = list(data_son.keys())  # Las claves son las épocas
+            errores = list(data_son.values())  # Los valores son los errores
             
             # Mostrar el contenido del archivo en la consola
             #print("Contenido del archivo:\n", contenido)

@@ -1,0 +1,7 @@
+                         
+Alpha = 0.5    
+Momentum = 0.9 
+Épocas = 1000     
+Error deseado = 0.001    
+Neuronas ocultas = 2
+

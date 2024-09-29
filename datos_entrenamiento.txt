@@ -1,8 +1,16 @@
                          
-Alpha = 0.5    
+Alpha = 0.1
 Momentum = 0.9 
-Épocas = 10000     
+Épocas = 10000   
 Error deseado = 0.001    
-Neuronas ocultas = 2
+Neuronas ocultas = 4
+
+
+
+
+
+
+
+
 
 

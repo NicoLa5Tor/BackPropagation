@@ -25,6 +25,31 @@ def centrar_ventana(ventana, ancho_ventana, alto_ventana):
 
     ventana.geometry(f"{ancho_ventana}x{alto_ventana}+{x}+{y}")
 
+class ScrollableFrame(ctk.CTkFrame):
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
+
+        # Crear un Canvas estándar de Tkinter dentro del Frame de CustomTkinter
+        self.canvas = tk.Canvas(self, bg='#2E3440', highlightthickness=0)
+        self.scrollbar = ctk.CTkScrollbar(self, orientation="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        # Empacar el Canvas y la Scrollbar
+        self.scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        # Crear un Frame interno dentro del Canvas
+        self.scrollable_frame = ctk.CTkFrame(self.canvas, fg_color='#2E3440')
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        # Crear una ventana en el Canvas para el Frame interno
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
 class Fit:
     def __init__(self):
         pass
@@ -222,6 +247,19 @@ def fit(neuronas=6, alp=0.01, epocas=30000, error=0.001, momentum=0.9):
     global_wh = wh
     global_w0 = w0
 
+    # Guardar resultados en un archivo de texto
+    with open("resultados_entrenamiento.txt", "w") as f:
+        f.write("Resultados del Entrenamiento:\n")
+        f.write(f"Neurons Hidden: {neuronas}\n")
+        f.write(f"Alpha: {alp}\n")
+        f.write(f"Momentum: {momentum}\n")
+        f.write(f"Épocas: {epocas}\n")
+        f.write(f"Error Deseado: {error}\n\n")
+        f.write("Resultados por Patrón:\n")
+        for res in results:
+            f.write(f"{res['pattern_name']}: X1={res['inputs'][0]:.6f}, X2={res['inputs'][1]:.6f}, YD={res['yd']}, YO={res['yo']}\n")
+        f.write(f"\n{mse_text}\n")
+
     return data_json, results, mse
 
 def parse_training_data(data):
@@ -311,7 +349,7 @@ Neuronas ocultas = 6
 
         canvas = FigureCanvasTkAgg(fig, master=frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, side=tk.TOP, anchor=tk.N)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     def mostrar_entrenamiento():
         limpiar_interfaz()
@@ -378,6 +416,15 @@ Neuronas ocultas = 6
             print(f"Errores registrados: {len(errores)}")
 
             graficar_errores(epocas, errores, bottom_right_frame)
+
+            # Mostrar mensaje de finalización y abrir el archivo de resultados
+            messagebox.showinfo("Entrenamiento Completo", "El entrenamiento ha finalizado correctamente.")
+            try:
+                os.startfile("resultados_entrenamiento.txt")
+            except AttributeError:
+                # Para sistemas que no soportan os.startfile, como Linux o Mac
+                import subprocess
+                subprocess.call(['open', "resultados_entrenamiento.txt"])
         else:
             messagebox.showwarning("Advertencia", "El archivo no existe. Cárgalo o créalo primero.")
 
@@ -405,10 +452,21 @@ Neuronas ocultas = 6
         left_frame.grid_rowconfigure(0, weight=1)
         left_frame.grid_columnconfigure(0, weight=1)
 
+        # Crear un ScrollableFrame para las gráficas en el lado derecho
         right_frame = ctk.CTkFrame(main_frame)
         right_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
         right_frame.grid_rowconfigure(0, weight=1)
         right_frame.grid_columnconfigure(0, weight=1)
+
+        scrollable = ScrollableFrame(right_frame)
+        scrollable.pack(fill="both", expand=True)
+
+        # Crear los frames para las gráficas dentro del ScrollableFrame
+        architecture_frame = ctk.CTkFrame(scrollable.scrollable_frame, fg_color='#2E3440')
+        architecture_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        training_plot_frame = ctk.CTkFrame(scrollable.scrollable_frame, fg_color='#2E3440')
+        training_plot_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Usar variables globales para acceder a los resultados del entrenamiento
         if global_results is not None and global_data_json is not None:
@@ -469,13 +527,6 @@ Neuronas ocultas = 6
 
             # Inicializar salidas
             update_outputs()
-
-            # Crear subframes dentro de right_frame para dos gráficas
-            architecture_frame = ctk.CTkFrame(right_frame)
-            architecture_frame.pack(fill="both", expand=True, padx=5, pady=5)
-
-            training_plot_frame = ctk.CTkFrame(right_frame)
-            training_plot_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
             # Crear gráfica con la arquitectura de la red neuronal
             def crear_grafica(frame):
@@ -592,7 +643,7 @@ Neuronas ocultas = 6
 
     root.protocol("WM_DELETE_WINDOW", cerrar_ventana)
 
-    centrar_ventana(root, 1000, 700)
+    centrar_ventana(root, 1200, 800)
 
     # Definir fuentes
     title_font = ctk.CTkFont(family="Helvetica", size=24, weight="bold")

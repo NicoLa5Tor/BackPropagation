@@ -1,382 +1,493 @@
-from Resources.fit import Fit
 import os
+import json
 import customtkinter as ctk
 from tkinter import messagebox
 import tkinter as tk
 import matplotlib.pyplot as plt
+from Resources.fit import Fit
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from tkinter import ttk  # Importar ttk para la tabla
 
-# Variables globales para almacenar los resultados del entrenamiento
-global_data_json = None
-global_results = None
-global_mse = None
+# Variables globales
+salidas = ""
 
-def fit(neuronas=2, alp=0.5, epocas=6000, error=0.01, momentum=0.9):
+# Variables globales para almacenar datos de entrenamiento
+entrenamiento_epocas = []
+entrenamiento_error_total = []
+
+# Variables globales para almacenar resultados de la aplicación
+aplicacion_patrones = []
+aplicacion_Y0 = []
+aplicacion_Y0_decimal = []
+aplicacion_Y0_binario = []
+aplicacion_Ydeseado = []
+correct_predictions = []
+
+# Definir los patrones globalmente
+patterns = [
+    ((0, 0, 0, 0), 0),
+    ((0, 0, 0, 1), 1),
+    ((0, 0, 1, 0), 1),
+    ((0, 0, 1, 1), 0),
+    ((0, 1, 0, 0), 1),
+    ((0, 1, 0, 1), 0),
+    ((0, 1, 1, 0), 0),
+    ((0, 1, 1, 1), 1),
+    ((1, 0, 0, 0), 1),
+    ((1, 0, 0, 1), 0),
+    ((1, 0, 1, 0), 0),
+    ((1, 0, 1, 1), 1),
+    ((1, 1, 0, 0), 0),
+    ((1, 1, 0, 1), 1),
+    ((1, 1, 1, 0), 1),
+    ((1, 1, 1, 1), 0)
+]
+
+def get_salidas():
+    global salidas
+    return salidas
+
+def set_salidas(data):
+    global salidas
+    salidas = data
+
+def intermediate(data):
+    str_data = str(data)
+    aux = []
+    data_list = str_data.strip().split(f"\n")
+    for x in data_list:
+        _, d = x.split("=")
+        aux.append(float(d.strip()))
+    data_json = fit(alp=aux[0], momentum=aux[1], epocas=aux[2], error=aux[3], neuronas=aux[4])
+    return data_json
+
+def fit(neuronas=8, alp=0.1, epocas=10000, error=0.01, momentum=0.4, update_callback=None):
+    global patterns  # Referenciar los patrones globales
     obj_fit = Fit()
-    
-    patterns = [
-        ((0.144052004, 0.12075527), -1),
-        ((0.864953975, 0.25656044), 0),
-        ((0.165339509, 0.48834463), 1),
-        ((0.797560171, 0.02913177), 0),
-        ((0.593582089, 0.13476484), -1),
-        ((0.704011446, 0.06116278), 0),
-        ((0.905842195, 0.35656061), -1),
-        ((0.543030439, 0.39351471), 1),
-        ((0.973983333, 0.46497479), -1),
-        ((0.308200305, 0.82542819), 1)
-    ]
-    
+
+    # Normalizar entradas al rango [-1, 1]
+    normalized_patterns = [([(x - 0.5) * 2 for x in inputs], yd) for inputs, yd in patterns]
     num_neurons_hidden = int(neuronas)
-    num_inputs = 2
+    num_inputs = 4
     num_outputs = 1
-    
+
     wh, th, w0, tk = obj_fit.initialize_weights(num_inputs, num_neurons_hidden, num_outputs)
-    
-    alpha = alp
-    Ep = epocas
-    ET = error
 
-    # Eliminar momentum de la llamada al método de entrenamiento
-    w0, wh, th, tk, data_json = obj_fit.train(
-        patterns, wh, th, w0, tk, alpha, Ep, ET, num_neurons_hidden
-    )
-    predictions = obj_fit.predict(patterns, wh, th, w0, tk, num_neurons_hidden)
+    # Inicializar deltas anteriores para el momentum
+    delta_w0_prev = [0] * len(w0)
+    delta_wh_prev = [0] * len(wh)
+    delta_th_prev = [0] * len(th)
+    delta_tk_prev = 0
 
-    results = []
-    for i, ((inputs, yd), (yd_pred, yo)) in enumerate(zip(patterns, predictions)):
-        result = f"Patrón {i+1}: yd = {yd:.6f}, yo = {yo:.6f}"
-        print(result)
-        # Incluir patrones de entrada en los resultados
-        results.append({
-            'pattern_name': f"Patrón {i+1}",
-            'inputs': inputs,
-            'yd': f"{yd:.6f}",
-            'yo': f"{yo:.6f}"
-        })
+    # Entrenar la red con momentum
+    epoch = 0
+    data_json = {}
+
+    while epoch < epocas:
+        error_total = 0
+        for x, yd in normalized_patterns:
+            yh = obj_fit.obj_f.forward_hidden_layer(x, wh, th, num_neurons_hidden)
+            yok1 = obj_fit.obj_f.forward_output_layer(yh, w0, tk, num_neurons_hidden)
+            Dok1, Dh = obj_fit.obj_f.calculate_deltas(yd, yok1, yh, w0)
+
+            # Actualizar pesos con momentum
+            w0, wh, th, tk, delta_w0_prev, delta_wh_prev, delta_th_prev, delta_tk_prev = obj_fit.obj_f.update_weights_momentum(
+                Dok1, Dh, yh, w0, wh, th, tk, x, alp, momentum, num_neurons_hidden,
+                delta_w0_prev, delta_wh_prev, delta_th_prev, delta_tk_prev
+            )
+            error_total += obj_fit.obj_f.calculate_error(Dok1)
+
+        data_json[epoch + 1] = error_total
+        if update_callback:
+            update_callback(epoch + 1, error_total)  # Actualizar consola con la época y error
+        epoch += 1
+
+    predictions = obj_fit.predict(normalized_patterns, wh, th, w0, tk, num_neurons_hidden)
+    Y0Binary = []
+    Y0Decimal = []
+    for i, (yd, yo) in enumerate(predictions):
+        Y0Binary.append(yo)
+        print(f"Patrón {i + 1}: yd = {yd:.6f}, yo = {yo:.6f}")
 
     mse = obj_fit.calculate_mse(predictions)
-    mse_text = f"Error Cuadrático Medio (MSE): {mse:.6f}"
-    print(mse_text)
-    return data_json, results, mse
+    print(f"Error Cuadrático Medio (MSE): {mse:.6f}")
+    Y0Decimal = Y0Binary
 
-def parse_training_data(data):
-    parameters = {}
-    data_list = data.strip().split("\n")
-    for line in data_list:
-        if '=' in line:
-            key, value = line.split("=")
-            key = key.strip().lower()
-            try:
-                parameters[key] = float(value.strip())
-            except ValueError:
-                messagebox.showerror("Error", f"Valor inválido para {key}")
-                return None
-        else:
-            messagebox.showerror("Error", f"La línea '{line}' no tiene el formato correcto.")
-            return None
-    required_keys = ['alpha', 'momentum', 'épocas', 'error deseado', 'neuronas ocultas']
-    if not all(k in parameters for k in required_keys):
-        messagebox.showerror("Error", "Faltan parámetros en los datos de entrenamiento.")
-        return None
-    return parameters
+    # Crear un dict con epochs como keys y error_total como values
+    resultado = {str(epoch): error_total for epoch, error_total in data_json.items()}
+
+    return [1 if x > 0.5 else 0 for x in Y0Binary], Y0Decimal, json.dumps(resultado)
 
 def graficar():
-    archivo = "datos_entrenamiento.txt"
-    datos_predefinidos = """Alpha = 0.5
-Momentum = 0.9
-Épocas = 1000
-Error deseado = 0.001
-Neuronas ocultas = 2
-"""
+    # Variables globales
+    global root, console_textbox
 
-    def abrir_ventana_edicion():
-        if not os.path.exists(archivo):
-            with open(archivo, 'w') as file:
-                file.write(datos_predefinidos)
-
-        ventana_edicion = ctk.CTkToplevel(root)
-        ventana_edicion.title("Editar Archivo de Entrenamiento")
-        ventana_edicion.geometry("600x500")
-
-        text_box = ctk.CTkTextbox(ventana_edicion, wrap="word", font=("Arial", 12))
-        text_box.pack(fill="both", expand=True, padx=10, pady=10)
-
-        with open(archivo, 'r') as file:
-            contenido = file.read()
-        text_box.insert(tk.END, contenido)
-
-        def guardar_cambios():
-            with open(archivo, 'w') as file:
-                contenido = text_box.get("1.0", tk.END)
-                file.write(contenido)
-            messagebox.showinfo("Guardado", "¡Los cambios se han guardado correctamente!")
-            ventana_edicion.destroy()
-
-        guardar_button = ctk.CTkButton(
-            ventana_edicion, text="GUARDAR CAMBIOS", command=guardar_cambios,
-            fg_color="#81A1C1", hover_color="#5E81AC", font=("Arial", 16, "bold")
-        )
-        guardar_button.pack(pady=20)
-
-    def leer_txt_y_entrenar():
-        if os.path.exists(archivo):
-            with open(archivo, 'r') as file:
-                contenido = file.read()
-            parameters = parse_training_data(contenido)
-            if parameters is None:
-                return
-
-            # Usar variables globales para almacenar los resultados del entrenamiento
-            global global_data_json, global_results, global_mse
-            global_data_json, global_results, global_mse = fit(
-                neuronas=int(parameters['neuronas ocultas']),
-                alp=parameters['alpha'],
-                epocas=int(parameters['épocas']),
-                error=parameters['error deseado'],
-                momentum=parameters['momentum']
-            )
-            epocas = list(global_data_json.keys())
-            errores = list(global_data_json.values())
-            graficar_errores(epocas, errores)
-        else:
-            messagebox.showwarning("Advertencia", "El archivo no existe. Cárgalo o créalo primero.")
-
-    def graficar_errores(epocas, errores):
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(epocas, errores, marker='o', color='#88C0D0')
-        ax.set_title("Épocas vs. Error Total")
-        ax.set_xlabel("Épocas")
-        ax.set_ylabel("Error Total")
-        ax.grid(True, color='#4C566A')
-        ax.set_facecolor('#2E3440')
-        fig.patch.set_facecolor('#2E3440')
-        ax.tick_params(colors='#D8DEE9')
-        ax.xaxis.label.set_color('#D8DEE9')
-        ax.yaxis.label.set_color('#D8DEE9')
-        ax.title.set_color('#ECEFF4')
-        fig.tight_layout()
-
-        for widget in bottom_right_frame.winfo_children():
-            widget.destroy()
-
-        canvas = FigureCanvasTkAgg(fig, master=bottom_right_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, side=tk.TOP, anchor=tk.N)
-
-    def mostrar_entrenamiento():
-        limpiar_interfaz()
-
-        frame_superior = ctk.CTkFrame(root)
-        frame_superior.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
-
-        texto_label = ctk.CTkLabel(frame_superior, text="BACK PROPAGATION ENTRENAMIENTO",
-                                   font=title_font)
-        texto_label.pack(pady=10)
-
-        root.grid_rowconfigure(2, weight=1)
-        root.grid_columnconfigure(0, weight=1)
-
-        data_frame = ctk.CTkFrame(root)
-        data_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
-        data_frame.grid_rowconfigure(0, weight=1)
-        data_frame.grid_rowconfigure(1, weight=4)
-        data_frame.grid_columnconfigure(0, weight=1)
-
-        top_right_frame = ctk.CTkFrame(data_frame)
-        top_right_frame.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
-
-        editar_button = ctk.CTkButton(top_right_frame, text="Crear y Editar Archivo", command=abrir_ventana_edicion,
-                                      fg_color="#81A1C1", hover_color="#5E81AC", font=button_font)
-        editar_button.grid(row=0, column=0, padx=5, pady=5, sticky="e")
-
-        entrenar_button = ctk.CTkButton(top_right_frame, text="Entrenar y Graficar", command=leer_txt_y_entrenar,
-                                        fg_color="#88C0D0", hover_color="#81A1C1", font=button_font)
-        entrenar_button.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-
-        top_right_frame.grid_columnconfigure(0, weight=1)
-        top_right_frame.grid_columnconfigure(1, weight=1)
-
-        global bottom_right_frame
-        bottom_right_frame = ctk.CTkFrame(data_frame)
-        bottom_right_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-
-        titulo_label = ctk.CTkLabel(bottom_right_frame, text="Gráfico de Épocas vs. Error Total",
-                                    font=subtitle_font)
-        titulo_label.pack(pady=10)
+    # Función de validación para permitir solo números y un punto decimal
+    def validate_float(new_value):
+        if new_value == "" or new_value == ".":
+            return True
+        try:
+            float(new_value)
+            return True
+        except ValueError:
+            return False
 
     def mostrar_aplicacion():
         limpiar_interfaz()
 
+        # Parte superior para imagen y título
         frame_superior = ctk.CTkFrame(root)
         frame_superior.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
 
-        texto_label = ctk.CTkLabel(frame_superior, text="BACK PROPAGATION APLICACIÓN",
-                                   font=title_font)
-        texto_label.pack(pady=10)
+        # Texto sobre la imagen
+        texto_label = ctk.CTkLabel(
+            frame_superior,
+            text="RNA BACK-PROPAGATION (A)",
+            font=ctk.CTkFont(size=24, weight="bold")
+        )
+        texto_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        root.grid_rowconfigure(2, weight=1)
-        root.grid_columnconfigure(0, weight=1)
+        # Crear un CTkScrollableFrame para el contenido inferior
+        main_scrollable_frame = ctk.CTkScrollableFrame(root, width=800, height=600)
+        main_scrollable_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
 
-        main_frame = ctk.CTkFrame(root)
-        main_frame.grid(row=2, column=0, padx=10, pady=10, sticky="nsew")
-        main_frame.grid_rowconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(0, weight=2)  # Peso ajustado a 2 para left_frame
-        main_frame.grid_columnconfigure(1, weight=3)  # Peso ajustado a 3 para right_frame
+        # Configurar la grilla del scrollable frame
+        main_scrollable_frame.grid_rowconfigure(0, weight=1)  # left_frame
+        main_scrollable_frame.grid_rowconfigure(1, weight=1)  # data_frame
+        main_scrollable_frame.grid_columnconfigure(0, weight=1)
 
-        left_frame = ctk.CTkFrame(main_frame)
+        # Parte inferior: dos contenedores uno sobre el otro
+
+        # left_frame
+        left_frame = ctk.CTkFrame(main_scrollable_frame, height=345)
         left_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        # data_frame
+        data_frame = ctk.CTkFrame(main_scrollable_frame, height=345)
+        data_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+
+        # Dividir el left_frame en dos filas (superior más grande que inferior)
+        left_frame.grid_rowconfigure(0, weight=3)  # Fila superior con más peso
+        left_frame.grid_rowconfigure(1, weight=1)  # Fila inferior con menos peso
+        left_frame.grid_columnconfigure(0, weight=1)  # Aseguramos que las columnas tomen todo el ancho
+
+        # Parte superior del left_frame (Gráfica Error vs Épocas)
+        top_left_frame = ctk.CTkFrame(left_frame)
+        top_left_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        top_left_label = ctk.CTkLabel(
+            top_left_frame,
+            text="Gráfica Error vs Épocas",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        top_left_label.pack(pady=10)  # Colocar el texto
+
+        # Crear un frame para la gráfica
+        grafica_frame = ctk.CTkFrame(top_left_frame)
+        grafica_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # Parte inferior del left_frame (Pesos Finales)
+        bottom_left_frame = ctk.CTkFrame(left_frame)
+        bottom_left_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        bottom_left_label = ctk.CTkLabel(
+            bottom_left_frame,
+            text="Pesos Finales",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        bottom_left_label.pack(pady=10)  # Colocar el texto
+
+        # Crear una tabla debajo de Pesos Finales
+        tabla_frame = ctk.CTkFrame(bottom_left_frame)
+        tabla_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # Configurar la tabla usando ttk.Treeview
+        columns = ("#Patrón", "Patrón de Entrada", "Y0", "Y0 Decimal", "Y0 Binario")
+        tree = ttk.Treeview(tabla_frame, columns=columns, show='headings')
+
+        # Definir los encabezados
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, anchor="center")
+
+        # Agregar scrollbar a la tabla
+        scrollbar = ttk.Scrollbar(tabla_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscroll=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.pack(fill='both', expand=True)
+
+        # Función para mostrar descripción al seleccionar una fila
+        def on_row_select(event):
+            selected_item = tree.focus()
+            if not selected_item:
+                return
+            values = tree.item(selected_item, 'values')
+            patron = values[1]
+            Y0 = int(values[2])  # Convertir a entero
+            Y0_decimal = float(values[3])  # Convertir a float
+            Y0_binario = int(values[4])  # Convertir a entero
+            ydeseado = patterns[int(values[0])][1]  # Obtener el valor deseado
+
+            # Comprobar si la predicción es correcta
+            correcto = "Sí" if (Y0 == ydeseado) else "No"
+
+            descripcion = (
+                f"Patrón de Entrada: {patron}\n"
+                f"Ydeseado: {ydeseado}\n"
+                f"Y0: {Y0}\n"
+                f"Y0 Decimal: {Y0_decimal}\n"
+                f"Y0 Binario: {Y0_binario}\n"
+                f"Resultado Correcto: {correcto}"
+            )
+            messagebox.showinfo("Detalle del Patrón", descripcion)
+
+        # Vincular el evento de selección
+        tree.bind("<<TreeviewSelect>>", on_row_select)
+
+        # Mostrar la gráfica si hay datos de entrenamiento
+        global entrenamiento_epocas, entrenamiento_error_total
+        if entrenamiento_epocas and entrenamiento_error_total:
+            # Limpiar la gráfica anterior si existe
+            for widget in grafica_frame.winfo_children():
+                widget.destroy()
+
+            # Crear una figura de matplotlib
+            fig, ax = plt.subplots(figsize=(5, 4), dpi=100)
+            ax.plot(entrenamiento_epocas, entrenamiento_error_total, linestyle='-', color='b')  # Línea continua
+            ax.set_title("Error Total vs Épocas")
+            ax.set_xlabel("Épocas")
+            ax.set_ylabel("Error Total")
+            ax.grid(True)
+
+            # Crear un canvas de matplotlib y agregarlo al frame
+            canvas = FigureCanvasTkAgg(fig, master=grafica_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill='both', expand=True)
+
+        # Llenar la tabla con los resultados de la aplicación
+        global aplicacion_patrones, aplicacion_Y0, aplicacion_Y0_decimal, aplicacion_Y0_binario, aplicacion_Ydeseado, correct_predictions
+        if aplicacion_patrones:
+            for i in range(len(aplicacion_patrones)):
+                patron_str = ", ".join(map(str, aplicacion_patrones[i]))
+                Y0 = aplicacion_Y0[i]
+                Y0_decimal = aplicacion_Y0_decimal[i]
+                Y0_binario = aplicacion_Y0_binario[i]
+                # Aquí se conserva el patrón y el resultado correcto
+                tree.insert("", "end", values=(i, patron_str, Y0, Y0_decimal, Y0_binario))
+
+    # Función para mostrar la interfaz de Entrenamiento
+    def mostrar_entrenamiento():
+        # Parte superior para imagen y título
+        def execute_training():
+            global entrenamiento_epocas, entrenamiento_error_total
+            global aplicacion_patrones, aplicacion_Y0, aplicacion_Y0_decimal, aplicacion_Y0_binario, aplicacion_Ydeseado, correct_predictions
+            try:
+                # Obtener valores de las entradas
+                error = float(error_deseado_entry.get())
+                alpha = float(alpha_entry.get())
+                epoca = int(epocas_entry.get())
+                momentum = float(momentum_entry.get())
+                neuronas = int(neuronas_entry.get())
+
+                # Limpiar el TextBox antes de mostrar nuevos resultados
+                console_textbox.delete(1.0, tk.END)
+
+                # Callback para actualizar el TextBox en cada época
+                def update_console(epoch, error_total):
+                    console_textbox.insert(tk.END, f"Epoch {epoch}: Error total = {error_total}\n")
+                    console_textbox.see(tk.END)  # Desplazar hacia abajo
+                    root.update_idletasks()  # Actualizar la interfaz gráfica
+
+                # Llamar a la función fit y mostrar resultados en el TextBox (consola)
+                Y0Binary, Y0Decimal, data_son = fit(alp=alpha, epocas=epoca, error=error, momentum=momentum, neuronas=neuronas, update_callback=update_console)
+
+                # Mostrar resultados finales
+                console_textbox.insert(tk.END, "Resultados finales:\n")
+                console_textbox.insert(tk.END, f"{Y0Binary}\n")
+
+                # Parsear el JSON recibido
+                datos = json.loads(data_son)
+
+                # Extraer épocas y error total
+                epocas_list = sorted([int(k) for k in datos.keys()])
+                error_total = [datos[str(k)] for k in epocas_list]
+
+                if not epocas_list or not error_total:
+                    messagebox.showerror("Error", "Datos insuficientes para graficar.")
+                    return
+
+                # Almacenar los datos de entrenamiento en variables globales
+                entrenamiento_epocas = epocas_list
+                entrenamiento_error_total = error_total
+
+                # Limpiar la gráfica anterior si existe
+                for widget in grafica_frame.winfo_children():
+                    widget.destroy()
+
+                # Crear una figura de matplotlib
+                fig, ax = plt.subplots(figsize=(5, 4), dpi=100)
+                ax.plot(epocas_list, error_total, linestyle='-', color='b')  # Línea continua
+                ax.set_title("Error Total vs Épocas")
+                ax.set_xlabel("Épocas")
+                ax.set_ylabel("Error Total")
+                ax.grid(True)
+
+                # Crear un canvas de matplotlib y agregarlo al frame
+                canvas = FigureCanvasTkAgg(fig, master=grafica_frame)
+                canvas.draw()
+                canvas.get_tk_widget().pack(fill='both', expand=True)
+
+                # Almacenar los resultados para la aplicación
+                aplicacion_patrones = [pat[0] for pat in patterns]
+                aplicacion_Y0 = Y0Binary
+                aplicacion_Y0_decimal = Y0Decimal
+                aplicacion_Y0_binario = [1 if y > 0.5 else 0 for y in Y0Binary]
+                aplicacion_Ydeseado = [pat[1] for pat in patterns]
+                correct_predictions = [aplicacion_Y0_binario[i] == aplicacion_Ydeseado[i] for i in range(len(patterns))]
+
+            except ValueError:
+                messagebox.showerror("Error", "Por favor, ingresa valores válidos.")
+            except json.JSONDecodeError:
+                messagebox.showerror("Error", "Error al procesar los datos JSON.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Ocurrió un error: {str(e)}")
+
+        frame_superior = ctk.CTkFrame(root)
+        frame_superior.grid(row=1, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
+        root.grid_rowconfigure(1, weight=0)  # Fila de la imagen no se expande
+        print("Cargando imagen desde:", os.path.abspath("Udec.jpg"))
+        # Texto sobre la imagen
+        texto_label = ctk.CTkLabel(frame_superior, text="RNA BACK-PROPAGATION (A) ENTRENAMIENTO",
+                                   font=ctk.CTkFont(size=24, weight="bold"))
+        texto_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Parte inferior: dos columnas
+        left_frame = ctk.CTkScrollableFrame(root)
+        left_frame.grid(row=2, column=0, padx=0, pady=0, sticky="nsew")
+        data_frame = ctk.CTkScrollableFrame(root, height=345)
+        data_frame.grid(row=2, column=1, padx=0, pady=0, sticky="nsew")
+
+        # Configurar el tamaño de las columnas (izquierda más grande que derecha)
+        root.grid_columnconfigure(0, weight=3)  # Columna izquierda más grande
+        root.grid_columnconfigure(1, weight=1)  # Columna derecha más pequeña
+        root.grid_rowconfigure(2, weight=1)     # Fila 2 se expande
+
+        # Configurar el left_frame
         left_frame.grid_rowconfigure(0, weight=1)
         left_frame.grid_columnconfigure(0, weight=1)
 
-        right_frame = ctk.CTkFrame(main_frame)
-        right_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
-        right_frame.grid_rowconfigure(0, weight=1)
-        right_frame.grid_columnconfigure(0, weight=1)
+        # Contenedor para Historial de Entrenamiento
+        history_frame = ctk.CTkFrame(left_frame)
+        history_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        history_label = ctk.CTkLabel(history_frame, text="Historial de Entrenamiento",
+                                       font=ctk.CTkFont(size=16, weight="bold"))
+        history_label.pack(pady=5)
 
-        # Usar variables globales para acceder a los resultados del entrenamiento
-        if global_results is not None and global_data_json is not None:
-            # Crear selector de patrón
-            pattern_options = [result['pattern_name'] for result in global_results]
-            selected_pattern = tk.StringVar(value=pattern_options[0])
+        # Crear un TextBox para mostrar el historial
+        console_textbox = ctk.CTkTextbox(history_frame, height=150)
+        console_textbox.pack(fill='both', expand=True)
 
-            def update_outputs(*args):
-                # Obtener índice del patrón seleccionado
-                index = pattern_options.index(selected_pattern.get())
-                # Obtener datos correspondientes
-                pattern_data = global_results[index]
+        # Parte superior del left_frame (Gráfica Error vs Épocas)
+        top_left_frame = ctk.CTkFrame(left_frame)
+        top_left_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        top_left_label = ctk.CTkLabel(
+            top_left_frame,
+            text="Gráfica Error vs Épocas",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        top_left_label.pack(pady=10)  # Colocar el texto
 
-                # Actualizar las etiquetas
-                label_input_x1_value.configure(text=f"{pattern_data['inputs'][0]:.6f}")
-                label_input_x2_value.configure(text=f"{pattern_data['inputs'][1]:.6f}")
-                label_yd_value.configure(text=pattern_data['yd'])
-                label_yo_value.configure(text=pattern_data['yo'])
-                label_mse_value.configure(text=f"{global_mse:.6f}")
+        # Crear un frame para la gráfica
+        grafica_frame = ctk.CTkFrame(top_left_frame)
+        grafica_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
-            # Menú desplegable para seleccionar el patrón
-            pattern_label = ctk.CTkLabel(left_frame, text="Seleccione un patrón:",
-                                         font=label_font)
-            pattern_label.pack(pady=(10, 5))
+        # Elementos de entrada en data_frame
+        error_deseado_label = ctk.CTkLabel(data_frame, text="Error Deseado:")
+        error_deseado_label.pack(pady=5)
+        vcmd = (root.register(validate_float), "%P")
+        error_deseado_entry = ctk.CTkEntry(data_frame, width=200, placeholder_text="Ej: 0.001")
+        error_deseado_entry.pack(pady=5)
+        error_deseado_entry.configure(validate="key", validatecommand=vcmd)
 
-            pattern_menu = ctk.CTkOptionMenu(left_frame, variable=selected_pattern, values=pattern_options,
-                                             fg_color="#4C566A", button_color="#434C5E",
-                                             button_hover_color="#4C566A", font=label_font)
-            pattern_menu.pack(pady=5)
+        alpha_label = ctk.CTkLabel(data_frame, text="Alpha:")
+        alpha_label.pack(pady=5)
+        alpha_entry = ctk.CTkEntry(data_frame, width=200, placeholder_text="Ej: 0.5")
+        alpha_entry.pack(pady=5)
+        alpha_entry.configure(validate="key", validatecommand=vcmd)
 
-            # Vincular el evento de selección
-            selected_pattern.trace('w', update_outputs)
+        epocas_label = ctk.CTkLabel(data_frame, text="Épocas:")
+        epocas_label.pack(pady=5)
+        epocas_entry = ctk.CTkEntry(data_frame, width=200, placeholder_text="Ej: 5000")
+        epocas_entry.pack(pady=5)
+        epocas_entry.configure(validate="key", validatecommand=vcmd)
 
-            # Marco para contener las etiquetas de datos y valores verticalmente
-            data_frame = ctk.CTkFrame(left_frame)
-            data_frame.pack(pady=10, fill="both", expand=True)
+        momentum_label = ctk.CTkLabel(data_frame, text="Momentum:")
+        momentum_label.pack(pady=5)
+        momentum_entry = ctk.CTkEntry(data_frame, width=200, placeholder_text="Ej: 0.9")
+        momentum_entry.pack(pady=5)
+        momentum_entry.configure(validate="key", validatecommand=vcmd)
 
-            # Organizar etiquetas y valores verticalmente
-            labels = ["X1:", "X2:", "YD (Salida deseada):", "YO (Salida obtenida):", "Error Cuadrático Medio (MSE):"]
-            value_labels = []
+        neuronas_label = ctk.CTkLabel(data_frame, text="Neuronas:")
+        neuronas_label.pack(pady=5)
+        neuronas_entry = ctk.CTkEntry(data_frame, width=200, placeholder_text="Ej: 8")
+        neuronas_entry.pack(pady=5)
+        neuronas_entry.configure(validate="key", validatecommand=vcmd)
 
-            for i, text in enumerate(labels):
-                lbl = ctk.CTkLabel(data_frame, text=text, font=label_font)
-                lbl.pack(pady=(5, 0))
-                val_lbl = ctk.CTkLabel(data_frame, text="", font=value_font)
-                val_lbl.pack(pady=(0, 5))
-                value_labels.append(val_lbl)
+        # Botón para ejecutar
+        ejecutar_button = ctk.CTkButton(data_frame, text="Ejecutar", command=execute_training)
+        ejecutar_button.pack(pady=20)
 
-            label_input_x1_value, label_input_x2_value, label_yd_value, label_yo_value, label_mse_value = value_labels
-
-            # Inicializar salidas
-            update_outputs()
-
-            # Crear gráfica con el error a través de las épocas
-            def crear_grafica():
-                epocas = list(global_data_json.keys())
-                errores = list(global_data_json.values())
-
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.plot(epocas, errores, marker='o', color='#88C0D0')
-                ax.set_title("Épocas vs. Error Cuadrático Medio (MSE)")
-                ax.set_xlabel("Épocas")
-                ax.set_ylabel("Error Cuadrático Medio (MSE)")
-                ax.grid(True, color='#4C566A')
-                ax.set_facecolor('#2E3440')
-                fig.patch.set_facecolor('#2E3440')
-                ax.tick_params(colors='#D8DEE9')
-                ax.xaxis.label.set_color('#D8DEE9')
-                ax.yaxis.label.set_color('#D8DEE9')
-                ax.title.set_color('#ECEFF4')
-                fig.tight_layout()
-
-                for widget in right_frame.winfo_children():
-                    widget.destroy()
-
-                canvas = FigureCanvasTkAgg(fig, master=right_frame)
-                canvas.draw()
-                canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-            crear_grafica()
-        else:
-            # Si aún no se ha realizado el entrenamiento
-            label_info = ctk.CTkLabel(left_frame, text="No se ha entrenado el modelo aún.",
-                                      font=label_font)
-            label_info.pack(pady=20)
-
+    # Función para limpiar la interfaz sin borrar los botones de selección
     def limpiar_interfaz():
         for widget in root.grid_slaves():
-            if int(widget.grid_info()['row']) != 0:
+            if widget.grid_info()['row'] != 0:  # Deja intacta la fila con los botones de selección
                 widget.destroy()
 
-    def cerrar_ventana():
-        root.destroy()
-
     def centrar_ventana(root):
-        root.update_idletasks()
+        # Obtén las dimensiones de la pantalla
         ancho_pantalla = root.winfo_screenwidth()
         alto_pantalla = root.winfo_screenheight()
 
+        # Obtén las dimensiones de la ventana
         ancho_ventana = 850
-        alto_ventana = 600
+        alto_ventana = 640  # Corregido de 'alto_pantalla' a 'alto_ventana'
 
+        # Calcula la posición de la ventana
         x = int((ancho_pantalla / 2) - (ancho_ventana / 2))
-        y = int((alto_pantalla / 2) - (alto_ventana / 2))
+        y = int((alto_pantalla / 2) - (alto_ventana / 2)) - 30
 
+        # Establece la geometría de la ventana
         root.geometry(f"{ancho_ventana}x{alto_ventana}+{x}+{y}")
 
-    # Inicializar la ventana principal
-    ctk.set_appearance_mode("dark")  # Opciones: "dark", "light", "system"
-    ctk.set_default_color_theme("dark-blue")  # Opciones: "blue", "green", "dark-blue"
+    # Crear la ventana principal
+    ctk.set_appearance_mode("dark")  # Modo oscuro
+    ctk.set_default_color_theme("blue")  # Tema azul por defecto
 
     root = ctk.CTk()
-    root.title("BackP | Juan Moreno - Nicolás Rodríguez Torres")
-    root.geometry("850x600")
-
-    root.protocol("WM_DELETE_WINDOW", cerrar_ventana)
-
+    root.title("Adeline | Juan Moreno - Nicolás Rodríguez Torres")
+    root.geometry("850x650")  # Mantener el tamaño original
     centrar_ventana(root=root)
-    
-    # Definir fuentes
-    title_font = ctk.CTkFont(family="Helvetica", size=24, weight="bold")
-    subtitle_font = ctk.CTkFont(family="Helvetica", size=18, weight="bold")
-    label_font = ctk.CTkFont(family="Helvetica", size=14)
-    value_font = ctk.CTkFont(family="Helvetica", size=14, weight="bold")
-    button_font = ctk.CTkFont(family="Helvetica", size=14, weight="bold")
 
-    # Botones de selección
+    # Configurar la grilla de la ventana principal
+    root.grid_rowconfigure(0, weight=0)  # Fila de los botones de selección
+    root.grid_rowconfigure(1, weight=0)  # Fila para frame_superior
+    root.grid_rowconfigure(2, weight=1)  # Fila para main_scrollable_frame
+    root.grid_columnconfigure(0, weight=1)
+    root.grid_columnconfigure(1, weight=1)
+
+    # Botones de selección entre "Aplicación" y "Entrenamiento", siempre visibles
     frame_seleccion = ctk.CTkFrame(root)
-    frame_seleccion.grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky="ew")
-    frame_seleccion.grid_columnconfigure(0, weight=1)
-    frame_seleccion.grid_columnconfigure(1, weight=1)
+    frame_seleccion.grid(row=0, column=0, columnspan=2, padx=10, pady=10)
 
-    boton_aplicacion = ctk.CTkButton(frame_seleccion, text="Aplicación", command=mostrar_aplicacion,
-                                     fg_color="#88C0D0", hover_color="#81A1C1", font=button_font)
-    boton_aplicacion.grid(row=0, column=0, padx=10, pady=10, sticky="e")
+    boton_aplicacion = ctk.CTkButton(frame_seleccion, text="Aplicación", command=mostrar_aplicacion)
+    boton_aplicacion.pack(side="left", padx=20)
 
-    boton_entrenamiento = ctk.CTkButton(frame_seleccion, text="Entrenamiento", command=mostrar_entrenamiento,
-                                        fg_color="#81A1C1", hover_color="#5E81AC", font=button_font)
-    boton_entrenamiento.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+    boton_entrenamiento = ctk.CTkButton(frame_seleccion, text="Entrenamiento", command=mostrar_entrenamiento)
+    boton_entrenamiento.pack(side="left", padx=20)
 
-    # Iniciar con la vista "Aplicación"
+    # Iniciar con la vista de "Aplicación" como predeterminada
     mostrar_aplicacion()
 
     # Iniciar la aplicación
     root.mainloop()
 
+# Ejecutar la función principal
 graficar()
